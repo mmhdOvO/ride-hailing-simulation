@@ -1,0 +1,6 @@
+# 网约车仿真项目 - Python 3.12.10 精确兼容版本清单
+numpy==1.26.4
+pandas==2.2.2
+matplotlib==3.8.4
+requests==2.31.0
+python-dotenv==1.0.1
