@@ -1,0 +1,413 @@
+{
+  "experiment": "llm_vs_baseline",
+  "params": {
+    "seed": 42,
+    "grid_size": 20,
+    "drivers": 20,
+    "llm_drivers": 10,
+    "steps": 200,
+    "order_prob": 0.3,
+    "strategy": "nearest",
+    "output": ""
+  },
+  "baseline": {
+    "total_orders": 65,
+    "completed_orders": 56,
+    "completion_rate": 86.15384615384616,
+    "total_revenue": 2751,
+    "total_distance": 1863,
+    "driver_stats": [
+      {
+        "id": 0,
+        "revenue": 69,
+        "distance": 91,
+        "final_position": [
+          19,
+          9
+        ]
+      },
+      {
+        "id": 1,
+        "revenue": 129,
+        "distance": 97,
+        "final_position": [
+          5,
+          19
+        ]
+      },
+      {
+        "id": 2,
+        "revenue": 132,
+        "distance": 90,
+        "final_position": [
+          14,
+          7
+        ]
+      },
+      {
+        "id": 3,
+        "revenue": 105,
+        "distance": 72,
+        "final_position": [
+          6,
+          10
+        ]
+      },
+      {
+        "id": 4,
+        "revenue": 168,
+        "distance": 110,
+        "final_position": [
+          0,
+          2
+        ]
+      },
+      {
+        "id": 5,
+        "revenue": 96,
+        "distance": 84,
+        "final_position": [
+          19,
+          11
+        ]
+      },
+      {
+        "id": 6,
+        "revenue": 249,
+        "distance": 133,
+        "final_position": [
+          6,
+          3
+        ]
+      },
+      {
+        "id": 7,
+        "revenue": 189,
+        "distance": 113,
+        "final_position": [
+          14,
+          4
+        ]
+      },
+      {
+        "id": 8,
+        "revenue": 60,
+        "distance": 49,
+        "final_position": [
+          15,
+          3
+        ]
+      },
+      {
+        "id": 9,
+        "revenue": 147,
+        "distance": 76,
+        "final_position": [
+          11,
+          2
+        ]
+      },
+      {
+        "id": 10,
+        "revenue": 81,
+        "distance": 77,
+        "final_position": [
+          9,
+          19
+        ]
+      },
+      {
+        "id": 11,
+        "revenue": 180,
+        "distance": 122,
+        "final_position": [
+          1,
+          7
+        ]
+      },
+      {
+        "id": 12,
+        "revenue": 159,
+        "distance": 96,
+        "final_position": [
+          19,
+          17
+        ]
+      },
+      {
+        "id": 13,
+        "revenue": 105,
+        "distance": 64,
+        "final_position": [
+          12,
+          12
+        ]
+      },
+      {
+        "id": 14,
+        "revenue": 177,
+        "distance": 98,
+        "final_position": [
+          5,
+          17
+        ]
+      },
+      {
+        "id": 15,
+        "revenue": 129,
+        "distance": 75,
+        "final_position": [
+          17,
+          16
+        ]
+      },
+      {
+        "id": 16,
+        "revenue": 81,
+        "distance": 115,
+        "final_position": [
+          2,
+          1
+        ]
+      },
+      {
+        "id": 17,
+        "revenue": 168,
+        "distance": 84,
+        "final_position": [
+          9,
+          0
+        ]
+      },
+      {
+        "id": 18,
+        "revenue": 183,
+        "distance": 133,
+        "final_position": [
+          7,
+          0
+        ]
+      },
+      {
+        "id": 19,
+        "revenue": 144,
+        "distance": 84,
+        "final_position": [
+          15,
+          7
+        ]
+      }
+    ],
+    "avg_waiting_time": 0.03571428571428571,
+    "max_waiting_time": 1,
+    "min_waiting_time": 0,
+    "avg_revenue": 137.55,
+    "max_revenue": 249,
+    "min_revenue": 60,
+    "revenue_gini": 0.1919847328244275,
+    "revenue_cv": 0.34126422163264375
+  },
+  "llm_mix": {
+    "total_orders": 61,
+    "completed_orders": 51,
+    "completion_rate": 83.60655737704919,
+    "total_revenue": 2577,
+    "total_distance": 1784,
+    "driver_stats": [
+      {
+        "id": 0,
+        "revenue": 0,
+        "distance": 29,
+        "final_position": [
+          15,
+          13
+        ]
+      },
+      {
+        "id": 1,
+        "revenue": 69,
+        "distance": 54,
+        "final_position": [
+          3,
+          4
+        ]
+      },
+      {
+        "id": 2,
+        "revenue": 102,
+        "distance": 60,
+        "final_position": [
+          0,
+          13
+        ]
+      },
+      {
+        "id": 3,
+        "revenue": 132,
+        "distance": 84,
+        "final_position": [
+          1,
+          13
+        ]
+      },
+      {
+        "id": 4,
+        "revenue": 84,
+        "distance": 86,
+        "final_position": [
+          2,
+          6
+        ]
+      },
+      {
+        "id": 5,
+        "revenue": 57,
+        "distance": 65,
+        "final_position": [
+          16,
+          19
+        ]
+      },
+      {
+        "id": 6,
+        "revenue": 162,
+        "distance": 107,
+        "final_position": [
+          15,
+          8
+        ]
+      },
+      {
+        "id": 7,
+        "revenue": 210,
+        "distance": 126,
+        "final_position": [
+          2,
+          9
+        ]
+      },
+      {
+        "id": 8,
+        "revenue": 153,
+        "distance": 109,
+        "final_position": [
+          5,
+          17
+        ]
+      },
+      {
+        "id": 9,
+        "revenue": 96,
+        "distance": 78,
+        "final_position": [
+          11,
+          2
+        ]
+      },
+      {
+        "id": 10,
+        "revenue": 165,
+        "distance": 92,
+        "final_position": [
+          16,
+          9
+        ]
+      },
+      {
+        "id": 11,
+        "revenue": 72,
+        "distance": 49,
+        "final_position": [
+          6,
+          13
+        ]
+      },
+      {
+        "id": 12,
+        "revenue": 42,
+        "distance": 73,
+        "final_position": [
+          15,
+          14
+        ]
+      },
+      {
+        "id": 13,
+        "revenue": 192,
+        "distance": 113,
+        "final_position": [
+          19,
+          6
+        ]
+      },
+      {
+        "id": 14,
+        "revenue": 177,
+        "distance": 119,
+        "final_position": [
+          19,
+          12
+        ]
+      },
+      {
+        "id": 15,
+        "revenue": 228,
+        "distance": 143,
+        "final_position": [
+          19,
+          12
+        ]
+      },
+      {
+        "id": 16,
+        "revenue": 123,
+        "distance": 112,
+        "final_position": [
+          15,
+          19
+        ]
+      },
+      {
+        "id": 17,
+        "revenue": 183,
+        "distance": 99,
+        "final_position": [
+          19,
+          17
+        ]
+      },
+      {
+        "id": 18,
+        "revenue": 228,
+        "distance": 126,
+        "final_position": [
+          0,
+          2
+        ]
+      },
+      {
+        "id": 19,
+        "revenue": 102,
+        "distance": 60,
+        "final_position": [
+          15,
+          3
+        ]
+      }
+    ],
+    "avg_waiting_time": 0.0392156862745098,
+    "max_waiting_time": 1,
+    "min_waiting_time": 0,
+    "avg_revenue": 128.85,
+    "max_revenue": 228,
+    "min_revenue": 0,
+    "revenue_gini": 0.2792200232828871,
+    "revenue_cv": 0.4883013171654448
+  },
+  "delta": {
+    "completion_rate": -2.547288776796975,
+    "total_revenue": -174,
+    "avg_waiting_time": 0.003501400560224091,
+    "revenue_gini": 0.0872352904584596
+  }
+}
