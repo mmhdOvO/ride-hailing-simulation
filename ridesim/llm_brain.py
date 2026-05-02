@@ -29,7 +29,10 @@ class DriverBrain:
         self.driver_id = driver_id
         self.api_key = os.getenv("DEEPSEEK_API_KEY")
         self.base_url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/")
-        self.model = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+        # 选单/步内决策：默认 V4-Flash；优先 DEEPSEEK_MODEL_DRIVER，否则回落到旧变量 DEEPSEEK_MODEL
+        self.model = os.getenv("DEEPSEEK_MODEL_DRIVER") or os.getenv(
+            "DEEPSEEK_MODEL", "deepseek-v4-flash"
+        )
         
         # 检查API密钥
         if not self.api_key:

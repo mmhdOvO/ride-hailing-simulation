@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 from . import config
+from .run_persistence import RIDESIM_PROJECT_BRIEF_FOR_LLM, load_run_json
 from .utils import driver as drv
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -21,6 +22,15 @@ load_dotenv()
 # 报告生成可略长于单步司机决策
 ANALYSIS_TIMEOUT_SEC = 60
 ANALYSIS_MAX_TOKENS = 2000
+BATCH_ANALYSIS_TIMEOUT_SEC = 120
+BATCH_ANALYSIS_MAX_TOKENS = 4000
+
+
+def _analysis_model_name() -> str:
+    """跑满后的报告生成：默认 V4-Pro；优先 DEEPSEEK_MODEL_ANALYSIS，否则回落 DEEPSEEK_MODEL。"""
+    return os.getenv("DEEPSEEK_MODEL_ANALYSIS") or os.getenv(
+        "DEEPSEEK_MODEL", "deepseek-v4-pro"
+    )
 
 
 def _compact_stats_for_prompt(sim) -> dict[str, Any]:
@@ -89,7 +99,7 @@ def generate_post_run_analysis_markdown(sim) -> tuple[str, str | None]:
         )
 
     base_url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/")
-    model = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+    model = _analysis_model_name()
     client = OpenAI(api_key=api_key, base_url=f"{base_url}/v1")
 
     payload = _compact_stats_for_prompt(sim)
@@ -115,6 +125,71 @@ def generate_post_run_analysis_markdown(sim) -> tuple[str, str | None]:
             temperature=0.4,
             max_tokens=ANALYSIS_MAX_TOKENS,
             timeout=ANALYSIS_TIMEOUT_SEC,
+        )
+        text = (response.choices[0].message.content or "").strip()
+        if not text:
+            return "", "大模型返回内容为空。"
+        return text, None
+    except Exception as e:
+        return "", f"调用大模型失败: {e}"
+
+
+def generate_batch_analysis_markdown(run_paths: list[Path]) -> tuple[str, str | None]:
+    """
+    读取若干已保存的 run_*.json，连同项目背景说明一并交给大模型做对比与解读。
+    """
+    if not run_paths:
+        return "", "未选择任何仿真记录文件。"
+
+    api_key = os.getenv("DEEPSEEK_API_KEY")
+    if not api_key:
+        return (
+            "",
+            "未设置 DEEPSEEK_API_KEY，请在项目根目录 .env 中配置。",
+        )
+
+    runs_payload: list[dict[str, Any]] = []
+    for p in run_paths:
+        try:
+            data = load_run_json(p)
+            runs_payload.append(
+                {
+                    "文件名": p.name,
+                    "保存时间_UTC": data.get("saved_at_utc"),
+                    "配置": data.get("config"),
+                    "结束步数": data.get("final_step"),
+                    "统计指标": data.get("statistics"),
+                }
+            )
+        except Exception as e:
+            return "", f"读取 {p.name} 失败: {e}"
+
+    base_url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/")
+    model = _analysis_model_name()
+    client = OpenAI(api_key=api_key, base_url=f"{base_url}/v1")
+
+    user_body = (
+        RIDESIM_PROJECT_BRIEF_FOR_LLM
+        + "\n\n以下是选中的一次或多次仿真实验 JSON 数组，请撰写综合分析报告：\n\n"
+        + json.dumps(runs_payload, ensure_ascii=False, indent=2)
+    )
+
+    system_msg = (
+        "你是交通仿真与网约车调度领域的分析助手。用户已提供【项目概况】与【多次实验的统计 JSON】。"
+        "请用中文 Markdown 撰写报告：若有多条记录，请对比差异（完成率、收入、等待、公平性等），分析可能原因（配置/随机种子/策略）；"
+        "若仅一条，则做深度解读。不要编造数据中不存在的数字。可含二级标题与列表，篇幅约 1000～1500 字。"
+    )
+
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_body},
+            ],
+            temperature=0.35,
+            max_tokens=BATCH_ANALYSIS_MAX_TOKENS,
+            timeout=BATCH_ANALYSIS_TIMEOUT_SEC,
         )
         text = (response.choices[0].message.content or "").strip()
         if not text:

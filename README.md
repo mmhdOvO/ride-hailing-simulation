@@ -24,9 +24,13 @@ pip install -r requirements.txt
 
 ```env
 DEEPSEEK_API_KEY=你的密钥
-# 可选
+# 可选（base_url 不变，与官方 OpenAI 兼容接口一致）
 DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_MODEL=deepseek-chat
+# 模型分工（默认）：司机选单 = Flash，仿真分析报告 = Pro（base_url 不变，仅改 model 名）
+DEEPSEEK_MODEL_DRIVER=deepseek-v4-flash
+DEEPSEEK_MODEL_ANALYSIS=deepseek-v4-pro
+# 未单独设置 DRIVER / ANALYSIS 时，会回退到旧变量 DEEPSEEK_MODEL（司机端与报告端均可用其兜底）
+# DEEPSEEK_MODEL=deepseek-chat
 ```
 
 不使用 LLM 时，在 `ridesim/config.py` 中设置 `USE_LLM_DRIVERS = False` 即可，无需配置 API。

@@ -6,3 +6,9 @@ __pycache__/
 .vscode/
 .idea/
 venv/
+
+# 本地仿真存档与 AI 报告（体积可能较大，不提交）
+saved_runs/*
+!saved_runs/.gitkeep
+saved_ai_analyses/*
+!saved_ai_analyses/.gitkeep

@@ -1,6 +1,6 @@
 """
 网约车仿真 Web 演示（Streamlit）
-包含：仿真控制台、乘客下单、司机状态、网格快照。
+包含：步进与自动跑满、乘客下单、司机状态、网格快照。
 
 运行（在项目根目录）:
   pip install streamlit
@@ -15,7 +15,8 @@ import contextlib
 import io
 import os
 import time
-from datetime import datetime
+from pathlib import Path
+
 
 # 必须在首次 import matplotlib / ridesim.visualizer 之前设置
 os.environ.setdefault("RIDESIM_MPL_BACKEND", "Agg")
@@ -23,20 +24,32 @@ os.environ.setdefault("RIDESIM_MPL_BACKEND", "Agg")
 import streamlit as st
 
 from ridesim import config
-from ridesim.post_run_analysis import generate_post_run_analysis_markdown
+from ridesim.post_run_analysis import (
+    generate_batch_analysis_markdown,
+    generate_post_run_analysis_markdown,
+)
+from ridesim.run_persistence import (
+    delete_ai_analysis,
+    delete_saved_run,
+    ensure_storage_dirs,
+    list_saved_ai_files,
+    list_saved_run_files,
+    load_ai_meta_for,
+    save_ai_analysis_markdown,
+    save_run_snapshot,
+)
 from ridesim.simulation import Simulation
 from ridesim.utils import driver as drv
 from ridesim.visualizer import make_snapshot_figure
 
-import matplotlib.pyplot as plt
+from matplotlib.pyplot import close as _plt_close_fig
 
-LAYOUT_MAIN_COLUMNS = [2.30, 0.62]
-LAYOUT_SUMMARY_MAP_COLUMNS = [0.22, 0.78]
-MAP_SHIFT_LEFT_PX = -128
-MAP_SCALE_MAX_WIDTH = "60%"
-MAP_INNER_COLUMNS = [0.03, 0.74, 0.23]
+# 左摘要 | 中地图 | 右留白：中间列几何中心在页面 50%，与上方 PLAY_CONTROL_CENTER_COLUMNS 之中列对齐
+LAYOUT_SUMMARY_MAP_COLUMNS = [0.22, 0.56, 0.22]
+PLAY_CONTROL_CENTER_COLUMNS = [1, 1, 1]
+# 地图显示宽度：None = 撑满「地图」所在列（st.image use_container_width）；设为正整数则固定像素宽
+MAP_IMAGE_DISPLAY_WIDTH_PX: int | None = 1000
 AUTO_PLAY_DELAY_SEC = 0.12
-LOG_PANEL_HEIGHT = 930
 
 # Streamlit 重跑时会把上一轮输出标成 stale 并降低透明度，看起来像整页变暗。
 # 下列样式尽量抵消该效果（升级 Streamlit 后若失效需按新版 DOM 微调）。
@@ -52,6 +65,28 @@ _STREAMLIT_STALE_GREY_FIX_CSS = """
     opacity: 1 !important;
 }
 """
+
+
+def _render_map_snapshot(sim: Simulation) -> None:
+    """将当前仿真状态渲染为 PNG，用 st.image 控制宽度（避免 st.pyplot 无法被外层 div 限制）。"""
+    fig = make_snapshot_figure(sim.drivers, sim.orders, sim.current_step)
+    buf = io.BytesIO()
+    try:
+        fig.savefig(
+            buf,
+            format="png",
+            dpi=120,
+            bbox_inches="tight",
+            facecolor=fig.get_facecolor(),
+        )
+    finally:
+        _plt_close_fig(fig)
+    buf.seek(0)
+    w = MAP_IMAGE_DISPLAY_WIDTH_PX
+    if w is not None:
+        st.image(buf, width=int(w))
+    else:
+        st.image(buf, use_container_width=True)
 
 
 def _silence_init_simulation() -> Simulation:
@@ -73,23 +108,6 @@ def _ensure_sim():
             config.DEBUG = backup_dbg
         st.session_state["_sim_serial"] = st.session_state.get("_sim_serial", 0) + 1
     return st.session_state["_sim"]
-
-
-def _reset_sim():
-    st.session_state.pop("_sim", None)
-    st.session_state.pop("_post_run_analysis_done_serial", None)
-    st.session_state["_post_run_analysis_md"] = ""
-    st.session_state.pop("_post_run_analysis_err", None)
-    _ensure_sim()
-
-
-def _append_console_log(message: str):
-    logs = st.session_state.setdefault("_console_logs", [])
-    ts = datetime.now().strftime("%H:%M:%S")
-    logs.append(f"[{ts}] {message}")
-    # 限制日志长度，避免页面越来越重
-    if len(logs) > 120:
-        del logs[: len(logs) - 120]
 
 
 def _cn_order_status(status: str) -> str:
@@ -136,62 +154,6 @@ def _cn_summary(data):
     return data
 
 
-def _render_autoscroll_log(content: str, height: int, dom_id: str):
-    """渲染日志框（原生组件，避免弃用 API）。"""
-    st.text_area(
-        label=dom_id,
-        value=content or "",
-        height=height,
-        disabled=True,
-        label_visibility="collapsed",
-    )
-
-
-def _print_summary_to_terminal(sim: Simulation):
-    """将当前统计打印到启动 Streamlit 的终端（含排行榜与收入对比）。"""
-    stats = sim.collect_statistics()
-    print("\n" + "=" * 60)
-    print("Web端触发：当前仿真统计报告")
-    print("=" * 60)
-    print(f"当前步数: {sim.current_step}/{config.SIMULATION_STEPS}")
-    print(f"总订单数: {stats.get('total_orders', 0)}")
-    print(f"完成订单数: {stats.get('completed_orders', 0)}")
-    print(f"完成率: {stats.get('completion_rate', 0):.2f}%")
-    print(f"总收入: {stats.get('total_revenue', 0)}")
-    if "avg_waiting_time" in stats:
-        print(f"平均等待时长: {stats['avg_waiting_time']:.2f}")
-    if "max_waiting_time" in stats:
-        print(f"最大等待时长: {stats['max_waiting_time']}")
-    if "revenue_gini" in stats:
-        print(f"收入基尼系数: {stats['revenue_gini']:.4f}")
-
-    # 司机收入/效率对比
-    llm_drivers = [d for d in sim.drivers if drv.is_llm(d)]
-    rule_drivers = [d for d in sim.drivers if not drv.is_llm(d)]
-    if llm_drivers and rule_drivers:
-        llm_total = sum(drv.revenue(d) for d in llm_drivers)
-        rule_total = sum(drv.revenue(d) for d in rule_drivers)
-        llm_avg = llm_total / max(1, len(llm_drivers))
-        rule_avg = rule_total / max(1, len(rule_drivers))
-        llm_dist = sum(drv.distance(d) for d in llm_drivers)
-        rule_dist = sum(drv.distance(d) for d in rule_drivers)
-        llm_eff = llm_total / max(1, llm_dist)
-        rule_eff = rule_total / max(1, rule_dist)
-        print("\n--- 策略组对比（LLM vs 规则）---")
-        print(f"LLM组: 人数={len(llm_drivers)} 总收入={llm_total} 人均收入={llm_avg:.2f} 收入/里程={llm_eff:.3f}")
-        print(f"规则组: 人数={len(rule_drivers)} 总收入={rule_total} 人均收入={rule_avg:.2f} 收入/里程={rule_eff:.3f}")
-
-    print("\n--- 司机收入排行榜 ---")
-    sorted_drivers = sorted(sim.drivers, key=lambda d: drv.revenue(d), reverse=True)
-    for i, d in enumerate(sorted_drivers, 1):
-        d_type = "LLM" if drv.is_llm(d) else config.NORMAL_STRATEGY
-        print(
-            f"{i:2d}. 司机{drv.driver_id(d):2d} [{d_type:<10}] "
-            f"收入={drv.revenue(d):4d} 里程={drv.distance(d):3d} 位置={drv.position(d)} 当前单={drv.current_order(d)}"
-        )
-    print("=" * 60)
-
-
 def _rerun_tabs_fragment_only() -> None:
     """主 Tab 区域局部刷新（演示/乘客/司机）；全页首次或旧版 Streamlit 时退回整页 rerun。"""
     try:
@@ -202,49 +164,35 @@ def _rerun_tabs_fragment_only() -> None:
         st.rerun()
 
 
+def _try_save_run_snapshot_if_complete(sim: Simulation) -> Path | None:
+    """若已跑满当前轮，将结果写入 saved_runs/（每 _sim_serial 仅一次）。返回文件路径或 None。"""
+    if sim.current_step < config.SIMULATION_STEPS:
+        return None
+    _snap_ser = st.session_state.get("_sim_serial", 0)
+    if st.session_state.get("_run_snapshot_saved_serial") == _snap_ser:
+        return None
+    try:
+        ensure_storage_dirs()
+        path = save_run_snapshot(sim)
+        st.session_state["_run_snapshot_saved_serial"] = _snap_ser
+        return path
+    except OSError:
+        return None
+
+
 @st.fragment
 def _render_simulation_tabs_fragment() -> None:
     """演示+乘客+司机同一片段：步进/连播时三 Tab 一并刷新（乘客订单表每步更新）。"""
     sim = _ensure_sim()
     autoplay_advanced = False
 
-    # 一轮仿真跑满后，自动调用大模型生成「结果解读」一次（与 _sim_serial 绑定，重置后重算）
-    if sim.current_step >= config.SIMULATION_STEPS:
-        _ser = st.session_state.get("_sim_serial", 0)
-        if st.session_state.get("_post_run_analysis_done_serial") != _ser:
-            if not os.getenv("DEEPSEEK_API_KEY"):
-                st.session_state["_post_run_analysis_md"] = ""
-                st.session_state["_post_run_analysis_err"] = (
-                    "未检测到 DEEPSEEK_API_KEY。请在项目根目录 `.env` 中配置后，"
-                    "在「AI 仿真报告」中点击「重新生成 AI 分析报告」；若刚添加密钥，需重启 Streamlit 以加载环境变量。"
-                )
-                st.session_state["_post_run_analysis_done_serial"] = _ser
-            else:
-                with st.spinner("正在生成 AI 仿真分析报告（调用大模型）…"):
-                    _md, _err = generate_post_run_analysis_markdown(sim)
-                st.session_state["_post_run_analysis_md"] = _md or ""
-                st.session_state["_post_run_analysis_err"] = _err
-                st.session_state["_post_run_analysis_done_serial"] = _ser
-
     if st.session_state["_play_steps_remaining"] > 0:
         if sim.current_step < config.SIMULATION_STEPS:
             sim.run_step()
             st.session_state["_play_steps_remaining"] -= 1
             autoplay_advanced = True
-            done_steps = st.session_state["_play_steps_requested"] - st.session_state["_play_steps_remaining"]
-            _append_console_log(f"连续执行中：已完成{done_steps}/{st.session_state['_play_steps_requested']}步，当前步数={sim.current_step}")
         else:
             st.session_state["_play_steps_remaining"] = 0
-
-        if st.session_state["_play_steps_remaining"] <= 0:
-            ran = sim.current_step - st.session_state["_play_start_step"]
-            _append_console_log(
-                f"连续执行完成：请求={st.session_state['_play_steps_requested']}步，实际={ran}步，当前步数={sim.current_step}"
-            )
-            if sim.current_step >= config.SIMULATION_STEPS and not st.session_state["_terminal_report_printed"]:
-                _print_summary_to_terminal(sim)
-                st.session_state["_terminal_report_printed"] = True
-                _append_console_log("到达最大步数，已自动打印终端统计")
 
     tab_demo, tab_passenger, tab_driver, tab_report = st.tabs(
         [
@@ -256,88 +204,94 @@ def _render_simulation_tabs_fragment() -> None:
     )
 
     with tab_demo:
-        left, right = st.columns(LAYOUT_MAIN_COLUMNS, gap="small")
-        with left:
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                if st.button("执行一步", type="primary"):
+        _pad_l, _mid_ctrl, _pad_r = st.columns(PLAY_CONTROL_CENTER_COLUMNS, gap="small")
+        with _pad_l:
+            st.empty()
+        with _mid_ctrl:
+            n_jump = st.number_input(
+                "连续执行步数",
+                min_value=1,
+                max_value=500,
+                value=10,
+                step=1,
+                key="input_play_n_steps",
+            )
+            b_run, b_one, b_end = st.columns(3, gap="small")
+            with b_run:
+                if st.button("连续执行", key="btn_play_batch", type="secondary"):
                     if sim.current_step >= config.SIMULATION_STEPS:
                         st.warning("已达到最大步数。")
-                        _append_console_log("执行一步失败：已达到最大步数")
-                    else:
-                        sim.run_step()
-                        _append_console_log(f"执行一步完成：当前步数={sim.current_step}")
-            with c2:
-                n_jump = st.number_input("连续执行步数", min_value=1, max_value=500, value=10, step=1)
-                if st.button("连续执行"):
-                    if sim.current_step >= config.SIMULATION_STEPS:
-                        st.warning("已达到最大步数。")
-                        _append_console_log("连续执行失败：已达到最大步数")
                     else:
                         st.session_state["_play_steps_remaining"] = int(n_jump)
                         st.session_state["_play_steps_requested"] = int(n_jump)
-                        st.session_state["_play_start_step"] = sim.current_step
-                        _append_console_log(f"开始连续执行：计划={int(n_jump)}步")
-                        # 连播计数在本按钮之后才写入；片段顶部已执行过，需立刻再跑一轮片段才会推进一步
                         _rerun_tabs_fragment_only()
-            with c3:
-                if st.button("仅重置仿真（保留侧边参数）"):
-                    _reset_sim()
-                    st.session_state["_terminal_report_printed"] = False
-                    _append_console_log("仅重置仿真（侧边参数保留）")
-                    st.rerun()
-                if st.button("打印当前统计到终端"):
-                    _print_summary_to_terminal(sim)
-                    _append_console_log("已将当前统计打印到终端")
-                    st.success("已打印到终端。")
-    
-            summary_col, map_col = st.columns(LAYOUT_SUMMARY_MAP_COLUMNS, gap="small")
-            with summary_col:
-                summary = sim.get_status_summary()
-                st.subheader("当前摘要")
-                st.json(_cn_summary(summary))
-                stats = sim.collect_statistics()
-                st.subheader("累计统计")
-                keys = [
-                    "total_orders",
-                    "completed_orders",
-                    "completion_rate",
-                    "total_revenue",
-                    "avg_waiting_time",
-                    "max_waiting_time",
-                    "revenue_gini",
-                ]
-                st.json(_cn_summary({k: stats[k] for k in keys if k in stats}))
+            with b_one:
+                if st.button("执行一步", key="btn_one_step", type="secondary"):
+                    if sim.current_step >= config.SIMULATION_STEPS:
+                        st.warning("已达到最大步数。")
+                    else:
+                        sim.run_step()
+            with b_end:
+                _remain = max(0, config.SIMULATION_STEPS - sim.current_step)
+                if st.button(
+                    "自动执行至结束",
+                    type="secondary",
+                    key="btn_run_to_end",
+                    disabled=_remain == 0,
+                    help="与「连续执行」相同：按步刷新界面；步数=当前剩余步数（可大于 500）。",
+                ):
+                    if sim.current_step >= config.SIMULATION_STEPS:
+                        st.warning("已达到最大步数。")
+                    else:
+                        st.session_state["_play_steps_remaining"] = int(_remain)
+                        st.session_state["_play_steps_requested"] = int(_remain)
+                        _rerun_tabs_fragment_only()
+        with _pad_r:
+            st.empty()
+
+        summary_col, map_col, _map_pad = st.columns(LAYOUT_SUMMARY_MAP_COLUMNS, gap="small")
+        with summary_col:
+            summary = sim.get_status_summary()
+            st.subheader("当前摘要")
+            st.json(_cn_summary(summary))
+            stats = sim.collect_statistics()
+            st.subheader("累计统计")
+            keys = [
+                "total_orders",
+                "completed_orders",
+                "completion_rate",
+                "total_revenue",
+                "avg_waiting_time",
+                "max_waiting_time",
+                "revenue_gini",
+            ]
+            st.json(_cn_summary({k: stats[k] for k in keys if k in stats}))
             st.caption(f"当前步数 {sim.current_step} / {config.SIMULATION_STEPS}")
-    
-            with map_col:
-                st.markdown("<div class='map-shift-left'>", unsafe_allow_html=True)
-                st.caption("地图快照")
-                _, map_mid, _ = st.columns(MAP_INNER_COLUMNS, gap="small")
-                with map_mid:
-                    st.markdown("<div class='map-scale-down'>", unsafe_allow_html=True)
-                    fig = make_snapshot_figure(sim.drivers, sim.orders, sim.current_step)
-                    st.pyplot(fig, width="stretch")
-                    st.markdown("</div>", unsafe_allow_html=True)
-                plt.close(fig)
-                st.markdown("</div>", unsafe_allow_html=True)
-    
-            if st.session_state["_play_steps_remaining"] > 0:
-                done = st.session_state["_play_steps_requested"] - st.session_state["_play_steps_remaining"]
-                st.progress(
-                    done / max(1, st.session_state["_play_steps_requested"]),
-                    text=f"连续执行中：{done}/{st.session_state['_play_steps_requested']} 步",
-                )
-    
-        with right:
-            st.subheader("控制台信息流 · 仿真日志")
-            logs = st.session_state.setdefault("_console_logs", [])
-            if st.button("清空控制台日志"):
-                st.session_state["_console_logs"] = []
-            if logs:
-                _render_autoscroll_log("\n".join(logs), LOG_PANEL_HEIGHT, "sim-log-box")
-            else:
-                st.info("暂无日志。执行仿真或提交订单后会显示记录。")
+
+        with map_col:
+            st.caption("地图快照")
+            _render_map_snapshot(sim)
+        with _map_pad:
+            st.empty()
+
+        if st.session_state["_play_steps_remaining"] > 0:
+            done = st.session_state["_play_steps_requested"] - st.session_state["_play_steps_remaining"]
+            st.progress(
+                done / max(1, st.session_state["_play_steps_requested"]),
+                text=f"连续执行中：{done}/{st.session_state['_play_steps_requested']} 步",
+            )
+
+        _saved_run_path = _try_save_run_snapshot_if_complete(sim)
+        if _saved_run_path is not None:
+            st.success(
+                f"仿真记录已写入 **`saved_runs/{_saved_run_path.name}`** ，「AI 仿真报告」第①节列表已同步。"
+            )
+            _toast = getattr(st, "toast", None)
+            if callable(_toast):
+                try:
+                    _toast(f"已保存仿真记录：{_saved_run_path.name}", icon="📁")
+                except Exception:
+                    pass
 
     with tab_passenger:
         st.markdown(
@@ -355,10 +309,6 @@ def _render_simulation_tabs_fragment() -> None:
             try:
                 order = sim.add_passenger_order(int(sx), int(sy), int(ex), int(ey))
                 st.success(f"订单已创建：订单ID={order['id']}，预估车费={order['fare']}（曼哈顿距离×3）")
-                _append_console_log(
-                    f"乘客下单：ID={order['id']} 起点=({order['start_x']},{order['start_y']}) "
-                    f"终点=({order['end_x']},{order['end_y']}) 车费={order['fare']}"
-                )
             except ValueError as e:
                 st.error(str(e))
 
@@ -424,30 +374,125 @@ def _render_simulation_tabs_fragment() -> None:
         st.dataframe(rows, width="stretch", height=980)
 
     with tab_report:
-        st.subheader("本轮仿真的大模型解读")
-        st.caption("当「当前步数」达到侧栏「最大仿真步数」时，自动根据累计统计生成一次；更换参数或重置后会重新生成。")
-        if sim.current_step < config.SIMULATION_STEPS:
-            st.info("尚未跑满一次完整仿真。请使用「执行一步」或「连续执行」直到达到最大步数。")
+        _repo = Path(__file__).resolve().parent
+        st.markdown(
+            f"**存档目录（项目根下）**：`saved_runs/`（仿真 JSON）、`saved_ai_analyses/`（大模型 Markdown + 元数据）。"
+            f"当前路径：`{_repo}`"
+        )
+
+        st.subheader("① 已保存的仿真结果")
+        ensure_storage_dirs()
+        run_files = list_saved_run_files()
+        st.caption(
+            f"`saved_runs/` 中共 **{len(run_files)}** 条记录；每次跑满「最大仿真步数」会自动追加一条。"
+        )
+        if run_files:
+            _name_to_path = {p.name: p for p in run_files}
+            _opts = [p.name for p in run_files]
+            _chosen = st.multiselect(
+                "勾选要交给大模型分析的仿真记录（可多选，模型将结合项目说明与统计数据撰写报告）",
+                options=_opts,
+                default=[],
+                key="multiselect_saved_runs_for_ai",
+            )
+            _b1, _b2 = st.columns([2, 1])
+            with _b1:
+                _do_batch = st.button(
+                    "生成大模型综合分析（含项目基本情况说明）",
+                    type="primary",
+                    key="btn_batch_llm_analysis",
+                )
+            with _b2:
+                st.caption("需配置 DEEPSEEK_API_KEY")
+
+            if _do_batch:
+                if not _chosen:
+                    st.warning("请至少勾选一条仿真记录。")
+                elif not os.getenv("DEEPSEEK_API_KEY"):
+                    st.error("未检测到 DEEPSEEK_API_KEY，请在项目根目录 `.env` 配置后重启 Streamlit。")
+                else:
+                    _paths_sel = [_name_to_path[n] for n in _chosen]
+                    with st.spinner("正在调用大模型（选中多条时可能需 1～2 分钟）…"):
+                        _md_batch, _err_batch = generate_batch_analysis_markdown(_paths_sel)
+                    if _err_batch:
+                        st.error(_err_batch)
+                    elif _md_batch:
+                        save_ai_analysis_markdown(
+                            _md_batch,
+                            source_run_filenames=list(_chosen),
+                            extra_meta={"analysis_type": "batch_from_saved_runs"},
+                        )
+                        st.success("分析已写入 `saved_ai_analyses/`，下方可查看或删除。")
+                        _rerun_tabs_fragment_only()
+
+            _del_opts = ["（不删除）"] + _opts
+            _del_pick = st.selectbox("删除某条仿真存档（仅从磁盘删除 JSON）", _del_opts, key="select_delete_run")
+            if st.button("删除所选仿真存档", key="btn_delete_run_file"):
+                if _del_pick != "（不删除）":
+                    delete_saved_run(_name_to_path[_del_pick])
+                    _rerun_tabs_fragment_only()
         else:
-            _err = st.session_state.get("_post_run_analysis_err")
-            _md = st.session_state.get("_post_run_analysis_md", "")
-            if _md:
-                if _err:
-                    st.caption(_err)
-                st.markdown(_md)
-            elif _err:
-                st.warning(_err)
-            else:
-                st.caption("报告将在跑满步数后自动生成；若长时间无内容，请检查网络与 API 配置。")
-            if st.button("重新生成 AI 分析报告", key="regen_post_run_analysis"):
-                st.session_state.pop("_post_run_analysis_done_serial", None)
-                st.session_state["_post_run_analysis_md"] = ""
-                st.session_state.pop("_post_run_analysis_err", None)
-                _rerun_tabs_fragment_only()
+            st.info("暂无存档。请将仿真跑满侧栏「最大仿真步数」，系统会自动保存 JSON。")
+
+        st.divider()
+        st.subheader("② 已保存的大模型分析报告")
+        ai_files = list_saved_ai_files()
+        if not ai_files:
+            st.info("暂无 AI 报告。可在上方勾选记录生成，或使用下方「本轮快速解读」。")
+        else:
+            for _ap in ai_files:
+                _meta = load_ai_meta_for(_ap)
+                with st.expander(_ap.name, expanded=False):
+                    if _meta:
+                        st.json(_meta)
+                    st.markdown(_ap.read_text(encoding="utf-8"))
+            _pick_del_ai = st.selectbox(
+                "删除已保存的大模型报告",
+                ["（不删除）"] + [_x.name for _x in ai_files],
+                key="select_delete_ai_report",
+            )
+            if st.button("删除所选报告文件", key="btn_delete_ai_report"):
+                if _pick_del_ai != "（不删除）":
+                    _map_ai = {p.name: p for p in ai_files}
+                    delete_ai_analysis(_map_ai[_pick_del_ai])
+                    _rerun_tabs_fragment_only()
+
+        st.divider()
+        st.subheader("③ 本轮仿真 · 快速 AI 解读（内存，可不勾选存档）")
+        if sim.current_step < config.SIMULATION_STEPS:
+            st.caption("请先跑满最大步数；跑满后会自动写入 `saved_runs/`，同时可用此处对「当前这一轮」立即生成解读。")
+        else:
+            if st.button("对当前已完成仿真立即生成 AI 解读并保存", key="btn_quick_ai_current"):
+                if not os.getenv("DEEPSEEK_API_KEY"):
+                    st.error("未检测到 DEEPSEEK_API_KEY。")
+                else:
+                    with st.spinner("正在调用大模型…"):
+                        _qm, _qe = generate_post_run_analysis_markdown(sim)
+                    if _qe:
+                        st.error(_qe)
+                    elif _qm:
+                        save_ai_analysis_markdown(
+                            _qm,
+                            source_run_filenames=["<当前内存中的已完成仿真>"],
+                            extra_meta={"analysis_type": "single_current_session"},
+                        )
+                        st.success("已保存至 `saved_ai_analyses/`。")
+                        _rerun_tabs_fragment_only()
 
     if st.session_state["_play_steps_remaining"] > 0 and autoplay_advanced:
         time.sleep(AUTO_PLAY_DELAY_SEC)
         _rerun_tabs_fragment_only()
+
+
+def _order_slider_sync_to_num() -> None:
+    st.session_state["g_order_p_num"] = round(float(st.session_state["g_order_p_slider"]), 2)
+
+
+def _order_num_sync_to_slider() -> None:
+    v = float(st.session_state["g_order_p_num"])
+    v = max(0.01, min(1.2, v))
+    st.session_state["g_order_p_num"] = round(v, 2)
+    st.session_state["g_order_p_slider"] = float(st.session_state["g_order_p_num"])
 
 
 def main():
@@ -455,13 +500,6 @@ def main():
     st.markdown(
         """
         <style>
-        /* 演示布局微调参数，尽量集中在常量区便于后续调整 */
-        .map-shift-left {
-            margin-left: """ + str(MAP_SHIFT_LEFT_PX) + """px;
-        }
-        .map-scale-down {
-            max-width: """ + MAP_SCALE_MAX_WIDTH + """;
-        }
         """ + _STREAMLIT_STALE_GREY_FIX_CSS + """
         </style>
         """,
@@ -474,6 +512,30 @@ def main():
         g_grid = st.number_input("网格大小", min_value=8, max_value=60, value=config.GRID_SIZE, step=1)
         g_drivers = st.number_input("司机数量", min_value=2, max_value=50, value=config.NUM_DRIVERS, step=1)
         g_steps = st.number_input("最大仿真步数", min_value=20, max_value=2000, value=config.SIMULATION_STEPS, step=10)
+        _op0 = float(getattr(config, "ORDER_PROBABILITY", 0.3))
+        if "g_order_p_num" not in st.session_state:
+            st.session_state["g_order_p_num"] = _op0
+        if "g_order_p_slider" not in st.session_state:
+            st.session_state["g_order_p_slider"] = _op0
+        st.slider(
+            "订单生成强度（每步期望订单数≈该值×时段倍数，与网格大小无关）",
+            min_value=0.01,
+            max_value=1.2,
+            step=0.01,
+            key="g_order_p_slider",
+            on_change=_order_slider_sync_to_num,
+            help="步长 0.01。数值偏小→订单少、司机易空闲；偏大→积压与等待变长。下方数字框可精确输入并与滑条联动。",
+        )
+        st.number_input(
+            "订单生成强度（精确输入）",
+            min_value=0.01,
+            max_value=1.2,
+            step=0.01,
+            format="%.2f",
+            key="g_order_p_num",
+            on_change=_order_num_sync_to_slider,
+            help="与上滑条同步；点「应用参数并重置仿真」时写入 config.ORDER_PROBABILITY。",
+        )
         g_seed = st.number_input("随机种子", min_value=0, max_value=99999, value=config.RANDOM_SEED, step=1)
         g_llm = st.checkbox("启用大模型司机（较慢，演示可关）", value=config.USE_LLM_DRIVERS)
         g_num_llm = st.number_input("大模型司机数量", min_value=0, max_value=50, value=min(config.NUM_LLM_DRIVERS, config.NUM_DRIVERS), step=1)
@@ -495,6 +557,7 @@ def main():
             config.GRID_SIZE = int(g_grid)
             config.NUM_DRIVERS = int(g_drivers)
             config.SIMULATION_STEPS = int(g_steps)
+            config.ORDER_PROBABILITY = float(st.session_state["g_order_p_num"])
             config.RANDOM_SEED = int(g_seed)
             config.USE_LLM_DRIVERS = bool(g_llm)
             config.NUM_LLM_DRIVERS = int(min(g_num_llm, g_drivers))
@@ -502,23 +565,13 @@ def main():
             if getattr(config, "AUTO_SCALE_ZONES", False):
                 config.auto_scale_zone_params()
             st.session_state.pop("_sim", None)
-            st.session_state.pop("_post_run_analysis_done_serial", None)
-            st.session_state["_post_run_analysis_md"] = ""
-            st.session_state.pop("_post_run_analysis_err", None)
+            st.session_state.pop("_run_snapshot_saved_serial", None)
             _ensure_sim()
-            st.session_state["_terminal_report_printed"] = False
-            _append_console_log(
-                f"应用参数并重置：网格={config.GRID_SIZE}，司机数={config.NUM_DRIVERS}，"
-                f"步数={config.SIMULATION_STEPS}，启用大模型={config.USE_LLM_DRIVERS}，策略={_strategy_labels.get(config.NORMAL_STRATEGY, config.NORMAL_STRATEGY)}"
-            )
             st.rerun()
 
     _ensure_sim()
     st.session_state.setdefault("_play_steps_remaining", 0)
     st.session_state.setdefault("_play_steps_requested", 0)
-    st.session_state.setdefault("_play_start_step", 0)
-    st.session_state.setdefault("_terminal_report_printed", False)
-    st.session_state.setdefault("_post_run_analysis_md", "")
     st.session_state.setdefault("_sim_serial", 0)
 
     _render_simulation_tabs_fragment()
