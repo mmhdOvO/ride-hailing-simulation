@@ -2,17 +2,233 @@
 utils.py
 通用工具函数
 """
-import random
 import math
+import random
+import threading
+from collections import deque
 
 from . import config
 
 # 设置随机种子，确保结果可复现
 random.seed(config.RANDOM_SEED)
 
+_ROAD_CACHE = {"key": None, "mask": None}
+_ROAD_DIST_CACHE = {}
+_ROAD_DIST_LOCK = threading.Lock()
+
 def manhattan_distance(x1, y1, x2, y2):
     """计算两点间的曼哈顿距离。这是网格世界中的移动距离。"""
     return abs(x1 - x2) + abs(y1 - y2)
+
+
+def get_road_mask():
+    """
+    生成/缓存道路掩码（True=道路可通行）。
+    """
+    key = (
+        config.GRID_SIZE,
+        bool(getattr(config, "USE_ROAD_NETWORK", False)),
+        int(getattr(config, "ROAD_SPACING", 4)),
+        bool(getattr(config, "ROAD_BORDER_RING", True)),
+        int(getattr(config, "RANDOM_SEED", 0)),
+    )
+    if _ROAD_CACHE["key"] == key and _ROAD_CACHE["mask"] is not None:
+        return _ROAD_CACHE["mask"]
+
+    n = config.GRID_SIZE
+    if not getattr(config, "USE_ROAD_NETWORK", False):
+        mask = [[True for _ in range(n)] for _ in range(n)]
+    else:
+        spacing = max(2, int(getattr(config, "ROAD_SPACING", 4)))
+        rng = random.Random(config.RANDOM_SEED + 20260429)
+        mask = [[False for _ in range(n)] for _ in range(n)]
+
+        # 1) 不规则主干道：在基础间隔上加入抖动，形成不均匀街区
+        verticals = []
+        x = 0
+        while x < n:
+            jitter = rng.randint(-1, 1)
+            vx = max(0, min(n - 1, x + jitter))
+            verticals.append(vx)
+            x += spacing + rng.randint(-1, 2)
+        horizontals = []
+        y = 0
+        while y < n:
+            jitter = rng.randint(-1, 1)
+            hy = max(0, min(n - 1, y + jitter))
+            horizontals.append(hy)
+            y += spacing + rng.randint(-1, 2)
+
+        # 增加一条近中心主干道，保证整体连通和观感
+        verticals.append(n // 2)
+        horizontals.append(n // 2)
+        verticals = sorted(set(verticals))
+        horizontals = sorted(set(horizontals))
+
+        for vx in verticals:
+            width = 1 + (1 if rng.random() < 0.25 else 0)  # 少量双车道主路
+            for yy in range(n):
+                for ox in range(width):
+                    xx = min(n - 1, vx + ox)
+                    mask[yy][xx] = True
+
+        for hy in horizontals:
+            width = 1 + (1 if rng.random() < 0.25 else 0)
+            for xx in range(n):
+                for oy in range(width):
+                    yy = min(n - 1, hy + oy)
+                    mask[yy][xx] = True
+
+        # 2) 局部支路：短路段，打破“棋盘式均匀”
+        branches = max(6, n // 3)
+        for _ in range(branches):
+            if rng.random() < 0.5 and verticals:
+                vx = rng.choice(verticals)
+                y0 = rng.randint(0, n - 1)
+                lo = max(2, spacing // 2)
+                hi = min(n - y0, spacing + 3)
+                if lo <= hi:
+                    seg_len = rng.randint(lo, hi)
+                    for yy in range(y0, min(n, y0 + seg_len)):
+                        mask[yy][vx] = True
+            elif horizontals:
+                hy = rng.choice(horizontals)
+                x0 = rng.randint(0, n - 1)
+                lo = max(2, spacing // 2)
+                hi = min(n - x0, spacing + 3)
+                if lo <= hi:
+                    seg_len = rng.randint(lo, hi)
+                    for xx in range(x0, min(n, x0 + seg_len)):
+                        mask[hy][xx] = True
+
+        if getattr(config, "ROAD_BORDER_RING", True):
+            for i in range(n):
+                mask[0][i] = True
+                mask[n - 1][i] = True
+                mask[i][0] = True
+                mask[i][n - 1] = True
+
+    _ROAD_CACHE["key"] = key
+    _ROAD_CACHE["mask"] = mask
+    _ROAD_DIST_CACHE.clear()
+    return mask
+
+
+def is_road(x, y):
+    if not (0 <= x < config.GRID_SIZE and 0 <= y < config.GRID_SIZE):
+        return False
+    return get_road_mask()[y][x]
+
+
+def snap_to_road(x, y):
+    """
+    将坐标吸附到最近道路格。
+    """
+    x = max(0, min(config.GRID_SIZE - 1, int(x)))
+    y = max(0, min(config.GRID_SIZE - 1, int(y)))
+    if is_road(x, y):
+        return x, y
+
+    q = deque([(x, y)])
+    visited = {(x, y)}
+    dirs = ((1, 0), (-1, 0), (0, 1), (0, -1))
+    while q:
+        cx, cy = q.popleft()
+        for dx, dy in dirs:
+            nx, ny = cx + dx, cy + dy
+            if not (0 <= nx < config.GRID_SIZE and 0 <= ny < config.GRID_SIZE):
+                continue
+            if (nx, ny) in visited:
+                continue
+            if is_road(nx, ny):
+                return nx, ny
+            visited.add((nx, ny))
+            q.append((nx, ny))
+    return x, y
+
+
+def get_road_neighbors(x, y):
+    res = []
+    for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+        nx, ny = x + dx, y + dy
+        if 0 <= nx < config.GRID_SIZE and 0 <= ny < config.GRID_SIZE and is_road(nx, ny):
+            res.append((nx, ny))
+    return res
+
+
+def random_road_point():
+    mask = get_road_mask()
+    candidates = [(x, y) for y in range(config.GRID_SIZE) for x in range(config.GRID_SIZE) if mask[y][x]]
+    if not candidates:
+        return random.randint(0, config.GRID_SIZE - 1), random.randint(0, config.GRID_SIZE - 1)
+    return random.choice(candidates)
+
+
+def next_step_on_road(start_x, start_y, target_x, target_y):
+    """
+    计算道路网络上从 start 到 target 的下一步坐标。
+    返回 None 表示不可达。
+    """
+    sx, sy = snap_to_road(start_x, start_y)
+    tx, ty = snap_to_road(target_x, target_y)
+    if (sx, sy) == (tx, ty):
+        return sx, sy
+
+    q = deque([(sx, sy)])
+    parent = {(sx, sy): None}
+    while q:
+        cx, cy = q.popleft()
+        if (cx, cy) == (tx, ty):
+            break
+        for nx, ny in get_road_neighbors(cx, cy):
+            if (nx, ny) in parent:
+                continue
+            parent[(nx, ny)] = (cx, cy)
+            q.append((nx, ny))
+
+    if (tx, ty) not in parent:
+        return None
+
+    cur = (tx, ty)
+    while parent[cur] is not None and parent[cur] != (sx, sy):
+        cur = parent[cur]
+    if parent[cur] is None:
+        return sx, sy
+    return cur
+
+
+def shortest_road_distance(start_x, start_y, target_x, target_y):
+    """
+    返回道路网络上的最短步长（BFS）。
+    若不可达，返回 None。
+    """
+    sx, sy = snap_to_road(start_x, start_y)
+    tx, ty = snap_to_road(target_x, target_y)
+    dist_key = (_ROAD_CACHE["key"], sx, sy, tx, ty)
+    with _ROAD_DIST_LOCK:
+        if dist_key in _ROAD_DIST_CACHE:
+            return _ROAD_DIST_CACHE[dist_key]
+        if (sx, sy) == (tx, ty):
+            _ROAD_DIST_CACHE[dist_key] = 0
+            return 0
+
+    q = deque([(sx, sy, 0)])
+    visited = {(sx, sy)}
+    while q:
+        cx, cy, dist = q.popleft()
+        for nx, ny in get_road_neighbors(cx, cy):
+            if (nx, ny) in visited:
+                continue
+            if (nx, ny) == (tx, ty):
+                value = dist + 1
+                with _ROAD_DIST_LOCK:
+                    _ROAD_DIST_CACHE[dist_key] = value
+                return value
+            visited.add((nx, ny))
+            q.append((nx, ny, dist + 1))
+    with _ROAD_DIST_LOCK:
+        _ROAD_DIST_CACHE[dist_key] = None
+    return None
 
 def print_grid(drivers, orders):
     """在控制台打印当前网格的文本地图，用于快速调试。"""
@@ -54,10 +270,11 @@ def print_grid(drivers, orders):
 
 def create_driver(driver_id):
     """创建并返回一个司机对象的字典。"""
+    x, y = random_road_point()
     return {
         'id': driver_id,
-        'x': random.randint(0, config.GRID_SIZE - 1),
-        'y': random.randint(0, config.GRID_SIZE - 1),
+        'x': x,
+        'y': y,
         'status': 'idle',        # 状态: 'idle'(空闲), 'to_pickup'(去接客), 'on_trip'(送客中)
         'current_order': None,   # 当前承接的订单ID
         'revenue': 0,            # 总收入
@@ -76,6 +293,13 @@ def generate_order(order_id, current_step=0):
         while end_x == start_x and end_y == start_y:
             end_x, end_y = random.randint(0, config.GRID_SIZE - 1), random.randint(0, config.GRID_SIZE - 1)
     
+    start_x, start_y = snap_to_road(start_x, start_y)
+    end_x, end_y = snap_to_road(end_x, end_y)
+    if end_x == start_x and end_y == start_y:
+        ex, ey = random_road_point()
+        if (ex, ey) != (start_x, start_y):
+            end_x, end_y = ex, ey
+
     # 生成时即计算订单费用（确保LLM能看到真实价值）
     distance = manhattan_distance(start_x, start_y, end_x, end_y)
     fare = distance * 3

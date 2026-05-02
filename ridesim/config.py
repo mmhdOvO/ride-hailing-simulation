@@ -88,6 +88,11 @@ FORCE_ONE_STEP_BEFORE_DISPATCH = True  # 新订单出现后强制等待一步，
 DEBUG = True             # 是否打印调试信息（如调度详情）
 RANDOM_SEED = 14         # 随机种子。固定此值可使每次运行结果相同，便于调试
 
+# ===== 伪真实道路网络 =====
+USE_ROAD_NETWORK = True   # 是否启用道路约束（司机仅能在道路上行驶）
+ROAD_SPACING = 4          # 主干路间隔（越小路网越密）
+ROAD_BORDER_RING = True   # 是否保留边界环路，避免局部不连通
+
 # ===== 可视化参数 =====
 VISUALIZE = True        # 是否开启图形化界面
 STEP_DELAY = 0.3         # 可视化时，每个时间步暂停的秒数（调小可加速）
@@ -102,3 +107,8 @@ NUM_LLM_DRIVERS = 10                # LLM司机数量（如果USE_LLM_DRIVERS=Tr
 API_TIMEOUT = 10                    # API调用超时（秒）
 MAX_API_RETRIES = 2                  # API调用失败重试次数
 CACHE_LLM_DECISIONS = True           # 是否缓存决策结果（节省成本）
+
+# 多 LLM 司机时是否并行请求 API（每步内各空闲司机同时思考，显著降低墙钟时间）
+LLM_PARALLEL_DECISIONS = True
+# 并行上限：0 表示与「本步空闲 LLM 司机数」相同；设为 3～5 可在 API 限流时降级
+LLM_PARALLEL_MAX_WORKERS = 0

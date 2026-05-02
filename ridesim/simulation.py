@@ -5,6 +5,7 @@ simulation.py
 import json
 import random
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from . import config
 from .dispatcher import dispatch_with_conflict_resolution
@@ -15,6 +16,7 @@ from .utils import (
     get_time_period_multiplier,
     manhattan_distance,
     print_grid,
+    snap_to_road,
 )
 from .utils import driver as drv
 
@@ -98,9 +100,11 @@ class Simulation:
             if not (0 <= x <= gx and 0 <= y <= gx):
                 raise ValueError(f"坐标越界: ({x},{y})，有效范围 0..{gx}")
 
+        start_x, start_y = snap_to_road(start_x, start_y)
+        end_x, end_y = snap_to_road(end_x, end_y)
         dist = manhattan_distance(start_x, start_y, end_x, end_y)
         if dist == 0:
-            raise ValueError("起点与终点不能相同")
+            raise ValueError("起点与终点吸附到道路后重合，请更换坐标")
 
         oid = self.order_counter
         order = {
@@ -154,16 +158,50 @@ class Simulation:
         当前采用“先决策后统一分配”模式：
         - 先让所有司机并行提出意向；
         - 再统一冲突消解，避免先来后到偏差。
+
+        若开启 LLM_PARALLEL_DECISIONS，各空闲 LLM 司机在本步内通过线程池同时调用 API，
+        墙钟时间接近「最慢的一单」而非「各单之和」。
         """
-        llm_decisions = {}
-        for driver in llm_drivers:
-            if drv.status(driver) == 'idle':
-                decision, selected_order = driver.decide_only(self.orders, self.current_step, all_driver_dicts)
-                llm_decisions[drv.driver_id(driver)] = {
+        idle = [d for d in llm_drivers if drv.status(d) == 'idle']
+        if not idle:
+            return {}
+
+        def collect_one(driver):
+            did = drv.driver_id(driver)
+            try:
+                decision, selected_order = driver.decide_only(
+                    self.orders, self.current_step, all_driver_dicts
+                )
+                return did, {
                     'driver': driver,
                     'decision': decision,
-                    'order': selected_order
+                    'order': selected_order,
                 }
+            except Exception as e:
+                print(f"  司机{did}决策异常: {e}，本步按原地等待处理")
+                return did, {
+                    'driver': driver,
+                    'decision': 'F',
+                    'order': None,
+                }
+
+        if not getattr(config, 'LLM_PARALLEL_DECISIONS', True) or len(idle) == 1:
+            llm_decisions = {}
+            for d in idle:
+                did, entry = collect_one(d)
+                llm_decisions[did] = entry
+            return llm_decisions
+
+        cap = int(getattr(config, 'LLM_PARALLEL_MAX_WORKERS', 0) or 0)
+        max_workers = len(idle) if cap <= 0 else min(len(idle), cap)
+        max_workers = max(1, max_workers)
+
+        llm_decisions = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = [pool.submit(collect_one, d) for d in idle]
+            for fut in as_completed(futures):
+                did, entry = fut.result()
+                llm_decisions[did] = entry
         return llm_decisions
     
     def _execute_llm_moves(self, llm_drivers, llm_decisions):

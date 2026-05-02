@@ -5,7 +5,7 @@ dispatcher.py
 import random
 
 from . import config
-from .utils import manhattan_distance
+from .utils import manhattan_distance, shortest_road_distance
 from .utils import driver as drv
 
 
@@ -24,7 +24,8 @@ def select_order_by_strategy(driver, orders):
     best_efficiency = -1
     
     for order in idle_orders:
-        dist = manhattan_distance(pos[0], pos[1], order['start_x'], order['start_y'])
+        road_dist = shortest_road_distance(pos[0], pos[1], order['start_x'], order['start_y'])
+        dist = road_dist if road_dist is not None else manhattan_distance(pos[0], pos[1], order['start_x'], order['start_y'])
         fare = order.get('fare', 0)
         efficiency = fare / max(dist, 1)  # 每格收入
         if efficiency > best_efficiency:

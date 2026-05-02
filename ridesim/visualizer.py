@@ -18,7 +18,12 @@ plt.rcParams['font.sans-serif'] = ['Microsoft YaHei']
 plt.rcParams['axes.unicode_minus'] = False
 
 from . import config
-from .utils import driver as drv
+from .utils import driver as drv, get_road_mask
+
+DARK_BG = "#0b1220"
+DARK_AX_BG = "#111a2e"
+DARK_GRID = "#7e94bf"
+DARK_TEXT = "#ffffff"
 
 
 def _legend_font():
@@ -33,24 +38,48 @@ def _legend_font():
 def setup_plot_axes(ax):
     """设置坐标轴、区域背景与图例（供动态窗口与静态快照共用）。"""
     ax.clear()
+    if ax.figure is not None:
+        ax.figure.patch.set_facecolor(DARK_BG)
+    ax.set_facecolor(DARK_AX_BG)
     ax.set_xlim(-0.5, config.GRID_SIZE - 0.5)
     ax.set_ylim(-0.5, config.GRID_SIZE - 0.5)
     ax.set_aspect('equal')
     ax.set_xticks(range(config.GRID_SIZE))
     ax.set_yticks(range(config.GRID_SIZE))
-    ax.grid(True, linestyle=':', color='gray', alpha=0.5)
-    ax.set_xlabel('X坐标')
-    ax.set_ylabel('Y坐标')
+    ax.grid(True, linestyle=':', color=DARK_GRID, alpha=0.95, linewidth=0.9)
+    ax.set_xlabel('X坐标', color=DARK_TEXT)
+    ax.set_ylabel('Y坐标', color=DARK_TEXT)
+    ax.tick_params(colors=DARK_TEXT, labelsize=8)
+    for spine in ax.spines.values():
+        spine.set_color("#6f84ad")
     ax.invert_yaxis()
+
+    # 伪真实道路底图：非道路区域加深，道路保持通透
+    if getattr(config, "USE_ROAD_NETWORK", False):
+        road_mask = get_road_mask()
+        for y in range(config.GRID_SIZE):
+            for x in range(config.GRID_SIZE):
+                if not road_mask[y][x]:
+                    ax.add_patch(
+                        patches.Rectangle(
+                            (x - 0.5, y - 0.5),
+                            1.0,
+                            1.0,
+                            facecolor="#060b16",
+                            edgecolor="none",
+                            alpha=0.62,
+                            zorder=0,
+                        )
+                    )
 
     if config.USE_ZONES:
         residential = patches.Circle(
             (config.RESIDENTIAL_CENTER_X, config.RESIDENTIAL_CENTER_Y),
             config.RESIDENTIAL_RADIUS,
             linewidth=1.5,
-            edgecolor='steelblue',
-            facecolor='lightskyblue',
-            alpha=0.12,
+            edgecolor='#5ea3ff',
+            facecolor='#4b91ff',
+            alpha=0.18,
             linestyle='--',
             zorder=1,
         )
@@ -62,7 +91,7 @@ def setup_plot_axes(ax):
             ha='center',
             va='center',
             fontsize=9,
-            color='steelblue',
+            color='#9fc8ff',
             fontweight='bold',
             zorder=2,
         )
@@ -71,9 +100,9 @@ def setup_plot_axes(ax):
             (config.WORK_AREA_CENTER_X, config.WORK_AREA_CENTER_Y),
             config.WORK_AREA_RADIUS,
             linewidth=1.5,
-            edgecolor='saddlebrown',
-            facecolor='navajowhite',
-            alpha=0.15,
+            edgecolor='#d6a15e',
+            facecolor='#f1b96c',
+            alpha=0.18,
             linestyle='--',
             zorder=1,
         )
@@ -85,29 +114,33 @@ def setup_plot_axes(ax):
             ha='center',
             va='center',
             fontsize=9,
-            color='saddlebrown',
+            color='#ffd59f',
             fontweight='bold',
             zorder=2,
         )
 
     font = _legend_font()
     legend_elements = [
-        Line2D([0], [0], marker='o', color='w', markerfacecolor='red', markersize=10, label='订单-等待中'),
-        Line2D([0], [0], marker='o', color='w', markerfacecolor='none', markeredgecolor='orange', markeredgewidth=2, markersize=10, label='订单-已接(赶往)'),
-        Line2D([0], [0], marker='o', color='w', markerfacecolor='blue', markersize=10, label='司机-空闲'),
-        Line2D([0], [0], marker='o', color='w', markerfacecolor='orange', markersize=10, label='司机-去接'),
-        Line2D([0], [0], marker='o', color='w', markerfacecolor='green', markersize=10, label='司机-送客'),
-        patches.Patch(facecolor='lightskyblue', edgecolor='steelblue', alpha=0.25, label='居民区范围'),
-        patches.Patch(facecolor='navajowhite', edgecolor='saddlebrown', alpha=0.30, label='工作区范围'),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='#ff6b81', markersize=10, label='订单-等待中'),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='none', markeredgecolor='#ffd166', markeredgewidth=2, markersize=10, label='订单-已接(赶往)'),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='#58b3ff', markersize=10, label='司机-空闲'),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='#ffd166', markersize=10, label='司机-去接'),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='#5cf2a5', markersize=10, label='司机-送客'),
+        patches.Patch(facecolor='#4b91ff', edgecolor='#5ea3ff', alpha=0.30, label='居民区范围'),
+        patches.Patch(facecolor='#f1b96c', edgecolor='#d6a15e', alpha=0.30, label='工作区范围'),
     ]
     if config.DISTINGUISH_LLM_IN_VIZ:
         legend_elements.insert(
             5,
-            Line2D([0], [0], marker='o', color='w', markerfacecolor='purple', markersize=10, label='LLM司机'),
+            Line2D([0], [0], marker='o', color='w', markerfacecolor='#ba68ff', markersize=10, label='LLM司机'),
         )
     leg = ax.legend(handles=legend_elements, loc='upper right')
+    leg.get_frame().set_facecolor("#0f1a30")
+    leg.get_frame().set_edgecolor("#9ab4e8")
+    leg.get_frame().set_alpha(0.97)
     for text in leg.get_texts():
         text.set_fontproperties(font)
+        text.set_color(DARK_TEXT)
 
 
 def _draw_frame(ax, drivers, orders, current_step):
@@ -115,15 +148,15 @@ def _draw_frame(ax, drivers, orders, current_step):
     ratio = current_step / max(1, config.SIMULATION_STEPS)
     if config.USE_TIME_PERIODS and config.MORNING_PEAK_START <= ratio < config.MORNING_PEAK_END:
         period_label = "早高峰"
-        period_color = "crimson"
+        period_color = "#ff6b81"
     elif config.USE_TIME_PERIODS and config.EVENING_PEAK_START <= ratio < config.EVENING_PEAK_END:
         period_label = "晚高峰"
-        period_color = "darkorange"
+        period_color = "#ffb347"
     else:
         period_label = "平峰"
-        period_color = "dimgray"
+        period_color = "#c8d7ff"
 
-    ax.set_title(f'网约车仿真 - 时间步: {current_step} | 时段: {period_label}')
+    ax.set_title(f'网约车仿真 - 时间步: {current_step} | 时段: {period_label}', color=DARK_TEXT)
     ax.text(
         0.02,
         0.98,
@@ -134,36 +167,36 @@ def _draw_frame(ax, drivers, orders, current_step):
         fontsize=10,
         color=period_color,
         fontweight='bold',
-        bbox=dict(boxstyle='round,pad=0.25', facecolor='white', edgecolor=period_color, alpha=0.85),
+        bbox=dict(boxstyle='round,pad=0.25', facecolor='#1b2844', edgecolor=period_color, alpha=0.9),
         zorder=30,
     )
 
     for order in orders:
         if order['status'] == 'waiting':
             start_circle = patches.Circle((order['start_x'], order['start_y']),
-                                          0.25, color='red', alpha=0.9, zorder=8)
+                                          0.25, color='#ff6b81', alpha=1.0, zorder=8)
             ax.add_patch(start_circle)
             ax.text(order['start_x'], order['start_y'] - 0.4,
                     f"O{order['id']}", ha='center', va='center',
-                    fontsize=8, color='darkred', fontweight='bold')
+                    fontsize=8, color='#fff3f5', fontweight='bold')
 
         elif order['status'] == 'to_pickup':
             start_circle = patches.Circle((order['start_x'], order['start_y']),
                                           0.28, linewidth=2,
-                                          edgecolor='orange', facecolor='none',
-                                          alpha=0.9, zorder=7)
+                                          edgecolor='#ffd166', facecolor='none',
+                                          alpha=1.0, zorder=7)
             ax.add_patch(start_circle)
             ax.text(order['start_x'], order['start_y'] - 0.4,
                     f"O{order['id']}", ha='center', va='center',
-                    fontsize=8, color='darkorange', fontweight='bold')
+                    fontsize=8, color='#fff1d6', fontweight='bold')
             ax.text(order['start_x'], order['start_y'] + 0.4,
                     f"(赶往)", ha='center', va='center',
-                    fontsize=6, color='darkorange')
+                    fontsize=6, color='#fff1d6')
 
         if order['status'] in ['waiting', 'to_pickup']:
             end_rect = patches.Rectangle((order['end_x'] - 0.35, order['end_y'] - 0.35),
                                          0.7, 0.7, linewidth=1.5,
-                                         edgecolor='red', facecolor='none',
+                                         edgecolor='#ff5f6d', facecolor='none',
                                          linestyle='--', alpha=0.4)
             ax.add_patch(end_rect)
 
@@ -173,17 +206,17 @@ def _draw_frame(ax, drivers, orders, current_step):
         driver_id = drv.driver_id(driver)
         is_llm = drv.is_llm(driver)
 
-        color_map = {'idle': 'blue', 'to_pickup': 'orange', 'on_trip': 'green'}
-        color = color_map.get(status, 'black')
+        color_map = {'idle': '#58b3ff', 'to_pickup': '#ffd166', 'on_trip': '#5cf2a5'}
+        color = color_map.get(status, '#b8c4df')
         if is_llm and config.DISTINGUISH_LLM_IN_VIZ:
-            color = 'purple'
+            color = '#ba68ff'
 
         driver_circle = patches.Circle((x, y), 0.35, color=color, alpha=0.8, zorder=10)
         ax.add_patch(driver_circle)
 
         if config.PLOT_DRIVER_NUM:
             highlight_llm = is_llm and config.DISTINGUISH_LLM_IN_VIZ
-            text_color = 'yellow' if highlight_llm else 'white'
+            text_color = '#ffe27a' if highlight_llm else '#ffffff'
             fontweight = 'bold' if highlight_llm else 'normal'
             ax.text(x, y, str(driver_id), ha='center', va='center',
                     fontsize=9, color=text_color, fontweight=fontweight)

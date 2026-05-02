@@ -65,6 +65,7 @@ class DriverBrain:
             'position': observation.get('position'),
             'status': observation.get('status'),
             'time': observation.get('time'),
+            'road_available_moves': observation.get('road_available_moves', []),
             'nearby_orders': [(o.get('id'), o.get('start_x'), o.get('start_y'), o.get('fare')) 
                              for o in observation.get('nearby_orders', [])[:5]]
         }
@@ -83,6 +84,7 @@ class DriverBrain:
         status = observation.get('status', 'idle')
         nearby_orders = observation.get('nearby_orders', [])
         other_drivers = observation.get('other_drivers', [])
+        road_available_moves = observation.get('road_available_moves', [])
         
         # 计算当前时段信息
         ratio = time_step / config.SIMULATION_STEPS if config.SIMULATION_STEPS > 0 else 0
@@ -117,19 +119,22 @@ class DriverBrain:
                 dist = order.get('pickup_dist')
                 if dist is None:
                     dist = abs(order['start_x'] - position[0]) + abs(order['start_y'] - position[1])
+                road_dist = order.get('road_pickup_dist')
+                if road_dist is None:
+                    road_dist = dist
                 efficiency = order.get('efficiency')
                 if efficiency is None:
                     fare = order.get('fare', 0)
-                    efficiency = fare / max(dist, 1)
-                sorted_orders.append((order, dist, efficiency))
+                    efficiency = fare / max(road_dist, 1)
+                sorted_orders.append((order, dist, road_dist, efficiency))
             
-            sorted_orders.sort(key=lambda x: x[2], reverse=True)
+            sorted_orders.sort(key=lambda x: x[3], reverse=True)
             
-            for i, (order, dist, eff) in enumerate(sorted_orders[:5]):
+            for i, (order, dist, road_dist, eff) in enumerate(sorted_orders[:5]):
                 orders_text += f"""
 订单{i+1}:
   ID: {order['id']}
-  起点: ({order['start_x']}, {order['start_y']}) - 距离你{dist}格
+  起点: ({order['start_x']}, {order['start_y']}) - 曼哈顿距离{dist}格，道路距离{road_dist}格
   终点: ({order['end_x']}, {order['end_y']}) - 订单距离{order.get('distance', '?')}格
   收入: {order.get('fare', 0)}元 (每格效率: {eff:.1f}元/格)
   区域前瞻分: {order.get('zone_score', 0):.2f} | 后续潜力分: {order.get('followup_score', 0):.2f}
@@ -137,6 +142,8 @@ class DriverBrain:
 """
         else:
             orders_text = "  当前附近没有订单，请移动探索或原地等待"
+        
+        road_moves_text = "、".join(road_available_moves) if road_available_moves else "无可移动道路方向"
         
         # 其他空闲司机位置（用于避免竞争）
         drivers_text = ""
@@ -153,16 +160,18 @@ class DriverBrain:
 - 居民区（左上角）: 中心({config.RESIDENTIAL_CENTER_X}, {config.RESIDENTIAL_CENTER_Y})，半径{config.RESIDENTIAL_RADIUS}格
 - 工作区（右下角）: 中心({config.WORK_AREA_CENTER_X}, {config.WORK_AREA_CENTER_Y})，半径{config.WORK_AREA_RADIUS}格
 - 早高峰：居民区订单多（去工作），晚高峰：工作区订单多（回家）
+- 你只能在道路网络上移动，不可穿越非道路区域
 
 【当前时段信息】
 - 当前时间步: {time_step}/{config.SIMULATION_STEPS}
 - 当前时段: {time_period}
 - 当前位置: ({position[0]}, {position[1]}) {'【在居民区】' if in_residential else ('【在工作区】' if in_work else '')}
+- 当前可行驶方向: {road_moves_text}
 
 【策略指导原则】
 1. 你拥有【全局视野】，可以看到整个城市所有区域的订单
 2. 目标不是只看当前一单，而是最大化“未来3-5步累计收益”
-3. 先看「每格效率」，再看订单终点是否把你带到下一波热点区域
+3. 优先看「道路距离效率」（收入/道路距离），再看订单终点是否把你带到下一波热点区域
 4. **早高峰策略**：优先考虑终点靠近工作区、起点来自居民区的订单
 5. **晚高峰策略**：优先考虑终点靠近居民区、起点来自工作区的订单
 6. **注意竞争**：若多个空闲司机离同一订单很近，宁可选次优但更稳能抢到的单
@@ -185,6 +194,8 @@ C) 向南移动一格 (Y加1)
 D) 向东移动一格 (X加1)
 E) 向西移动一格 (X减1)
 F) 原地等待（不推荐，除非有明确理由）
+
+注意：如果某个方向不在“当前可行驶方向”中，则该方向无效，不应选择。
 
 请选择最佳动作。**只回复一个字母**（A、B、C、D、E或F），不要解释，不要输出其他任何内容。
 """

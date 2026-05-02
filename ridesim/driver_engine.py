@@ -5,6 +5,7 @@ driver_engine.py
 import random
 
 from . import config
+from .utils import get_road_neighbors, next_step_on_road, shortest_road_distance, snap_to_road
 
 
 # ========== 普通司机更新函数（字典类型） ==========
@@ -44,25 +45,26 @@ def move_driver_towards(driver, target_x, target_y, current_step=0):
     让司机向目标坐标移动一格（曼哈顿距离）。
     返回 True 如果司机已经到达目标，否则返回 False。
     """
+    driver['x'], driver['y'] = snap_to_road(driver['x'], driver['y'])
+    tx, ty = snap_to_road(target_x, target_y)
     # 记录移动前的位置
     driver['history'].append((driver['x'], driver['y']))
 
     # 如果已在目标点，无需移动
-    if driver['x'] == target_x and driver['y'] == target_y:
+    if driver['x'] == tx and driver['y'] == ty:
         return True
 
-    # 曼哈顿移动：每步只移动一格，先横向后纵向（确定性路径）
-    if driver['x'] < target_x:
-        driver['x'] += 1
-    elif driver['x'] > target_x:
-        driver['x'] -= 1
-    elif driver['y'] < target_y:
-        driver['y'] += 1
-    elif driver['y'] > target_y:
-        driver['y'] -= 1
+    nxt = next_step_on_road(driver['x'], driver['y'], tx, ty)
+    if nxt is None:
+        return False
+    nx, ny = nxt
+    if (nx, ny) == (driver['x'], driver['y']):
+        return driver['x'] == tx and driver['y'] == ty
+
+    driver['x'], driver['y'] = nx, ny
 
     driver['total_distance'] += 1
-    return False  # 尚未到达
+    return driver['x'] == tx and driver['y'] == ty
 
 def update_driver(driver_obj, all_orders, current_step=None):
     """
@@ -84,10 +86,11 @@ class LLMDriver:
         """初始化LLM司机"""
         from .llm_brain import DriverBrain
         
+        x, y = snap_to_road(random.randint(0, config.GRID_SIZE - 1), random.randint(0, config.GRID_SIZE - 1))
         self.driver = {
             'id': driver_id,
-            'x': random.randint(0, config.GRID_SIZE - 1),
-            'y': random.randint(0, config.GRID_SIZE - 1),
+            'x': x,
+            'y': y,
             'status': 'idle',
             'current_order': None,
             'revenue': 0,
@@ -129,19 +132,29 @@ class LLMDriver:
         - nearby_orders 已按即时效率预排序，供 prompt 展示与候选过滤。
         """
         nearby = []
+        px, py = self.driver['x'], self.driver['y']
         for order in self._get_visible_waiting_orders(all_orders):
-            pickup_dist = abs(order['start_x'] - self.driver['x']) + abs(order['start_y'] - self.driver['y'])
+            pickup_dist = abs(order['start_x'] - px) + abs(order['start_y'] - py)
+            road_pickup_dist = shortest_road_distance(px, py, order['start_x'], order['start_y'])
+            effective_dist = road_pickup_dist if road_pickup_dist is not None else pickup_dist
             zone_score = self._zone_score(order['end_x'], order['end_y'], current_step)
             followup_score = self._expected_followup_score(order, current_step)
             nearby.append({
                 **order,
                 'pickup_dist': pickup_dist,
-                'efficiency': order['fare'] / max(pickup_dist, 1),
+                'road_pickup_dist': road_pickup_dist,
+                'efficiency': order['fare'] / max(effective_dist, 1),
                 'zone_score': zone_score,
                 'followup_score': followup_score,
             })
 
-        nearby.sort(key=lambda o: (-o['efficiency'], o['pickup_dist']))
+        nearby.sort(
+            key=lambda o: (
+                -o['efficiency'],
+                o['road_pickup_dist'] if o.get('road_pickup_dist') is not None else 10**9,
+                o['pickup_dist'],
+            )
+        )
         
         other_driver_info = []
         if all_drivers:
@@ -153,13 +166,23 @@ class LLMDriver:
                         'status': d['status']
                     })
         
+        neighbors = get_road_neighbors(px, py)
+        direction_map = {(0, -1): 'B', (0, 1): 'C', (1, 0): 'D', (-1, 0): 'E'}
+        road_available_moves = []
+        for nx, ny in neighbors:
+            dx, dy = nx - px, ny - py
+            mv = direction_map.get((dx, dy))
+            if mv:
+                road_available_moves.append(mv)
+
         observation = {
             'time': current_step,
-            'position': (self.driver['x'], self.driver['y']),
+            'position': (px, py),
             'income': self.driver['revenue'],
             'status': self.driver['status'],
             'nearby_orders': nearby[:10],
-            'other_drivers': other_driver_info
+            'other_drivers': other_driver_info,
+            'road_available_moves': sorted(set(road_available_moves)),
         }
         
         return observation
@@ -177,19 +200,27 @@ class LLMDriver:
     
     def move(self, direction):
         """根据方向移动一格：'B'(北), 'C'(南), 'D'(东), 'E'(西)"""
+        self.driver['x'], self.driver['y'] = snap_to_road(self.driver['x'], self.driver['y'])
         old_x, old_y = self.driver['x'], self.driver['y']
-        
-        if direction == 'B' and self.driver['y'] > 0:
-            self.driver['y'] -= 1
-        elif direction == 'C' and self.driver['y'] < config.GRID_SIZE - 1:
-            self.driver['y'] += 1
-        elif direction == 'D' and self.driver['x'] < config.GRID_SIZE - 1:
-            self.driver['x'] += 1
-        elif direction == 'E' and self.driver['x'] > 0:
-            self.driver['x'] -= 1
-        else:
+
+        preferred = {
+            'B': (0, -1),
+            'C': (0, 1),
+            'D': (1, 0),
+            'E': (-1, 0),
+        }.get(direction, (0, 0))
+
+        neighbors = get_road_neighbors(old_x, old_y)
+        if not neighbors:
             return False
-        
+
+        tx, ty = old_x + preferred[0], old_y + preferred[1]
+        # 优先选“接近期望方向”的道路邻居
+        nx, ny = min(neighbors, key=lambda p: abs(p[0] - tx) + abs(p[1] - ty))
+        if (nx, ny) == (old_x, old_y):
+            return False
+
+        self.driver['x'], self.driver['y'] = nx, ny
         self.driver['history'].append((old_x, old_y))
         self.driver['total_distance'] += 1
         return True
