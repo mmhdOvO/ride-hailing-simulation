@@ -67,48 +67,16 @@ ridesim/                 # 仿真核心包（业务代码集中在此）
   visualizer.py          # Matplotlib 动态网格
 main.py                  # 交互入口
 web_app.py               # Streamlit：乘客端/司机端/仿真控制台
-tests/                   # 自动化测试脚本
-  health/                # 健康性/回归测试（unittest）
-  experiments/           # 论文实验脚本（生成对比 JSON）
-tests/output/            # 测试导出 JSON（可加入 .gitignore）
+saved_runs/              # 跑满仿真后的 JSON 存档（默认不入库，见 .gitignore）
+saved_ai_analyses/       # 大模型分析报告 Markdown（默认不入库）
 requirements.txt
 README.md
 .env                     # API 密钥（勿提交仓库）
 ```
 
-代码中通过 `from ridesim import config`、`from ridesim.simulation import Simulation` 等方式引用；**请在仓库根目录运行** `main.py` 与 `tests/` 下脚本，以便正确加载包与 `.env`。
+代码中通过 `from ridesim import config`、`from ridesim.simulation import Simulation` 等方式引用；**请在仓库根目录运行** `main.py` 或 `streamlit run web_app.py`，以便正确加载包与 `.env`。
 
-## 健康性测试（`tests/health`）
-
-在**仓库根目录**执行：
-
-```bash
-python -m unittest discover -s tests/health -p "test_*.py" -v
-# 或按需单独运行：
-python tests/health/test_01_smoke.py                 # 无 LLM 快速冒烟
-python tests/health/test_02_dispatch_strategies.py   # 三种普通司机策略可执行性
-python tests/health/test_03_export_schema.py         # 导出 JSON 结构校验
-python tests/health/test_04_llm_smoke_optional.py    # 可选 LLM 冒烟（需 DEEPSEEK_API_KEY）
-python tests/health/test_05_multi_seed_regression.py # 多随机种子稳定性回归
-```
-
-## 论文实验脚本（`tests/experiments`）
-
-在**仓库根目录**执行（默认输出到 `tests/output/`）：
-
-```bash
-python tests/experiments/exp_01_baseline_strategies.py
-python tests/experiments/exp_02_llm_vs_baseline.py --llm-drivers 10
-python tests/experiments/exp_03_multi_seed_compare.py --seeds 3 7 11 19 29
-python tests/experiments/exp_04_high_load_compare.py --drivers 12 --order-prob 0.45
-python tests/experiments/exp_05_report_table.py
-```
-
-其中 `exp_05_report_table.py` 会读取 `tests/output/exp_*.json` 并生成论文可粘贴的 Markdown 报告：
-
-```bash
-tests/output/experiment_report.md
-```
+本仓库**不包含**自动化测试目录 `tests/`；指标对比与存档可使用网页「AI 仿真报告」或自行编写脚本调用 `Simulation`。
 
 ## 统计与导出
 

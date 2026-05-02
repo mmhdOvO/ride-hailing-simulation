@@ -1,2 +1,0 @@
-"""Paper experiment scripts package."""
-

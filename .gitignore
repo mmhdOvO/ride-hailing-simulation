@@ -12,3 +12,6 @@ saved_runs/*
 !saved_runs/.gitkeep
 saved_ai_analyses/*
 !saved_ai_analyses/.gitkeep
+
+# 本仓库不纳入自动化测试目录（若本地自建可忽略）
+tests/
