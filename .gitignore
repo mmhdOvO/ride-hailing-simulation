@@ -15,3 +15,22 @@ saved_ai_analyses/*
 
 # 本仓库不纳入自动化测试目录（若本地自建可忽略）
 tests/
+
+# 本地工具脚本 / 实验产物（常含本机路径或大文件，不提交）
+.claude/
+experiment_results/
+apply_replacements.py
+rewrite_thesis.py
+build_replacements.py
+build_full_replacements.py
+replacements.json
+test_replacements.json
+extend_json.py
+add_ch45.py
+add_ch6.py
+add_final.py
+add_remaining.py
+extra_pairs.tsv
+remaining_paras.txt
+show_results.py
+run_experiments.py

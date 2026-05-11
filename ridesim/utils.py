@@ -79,27 +79,7 @@ def get_road_mask():
                     yy = min(n - 1, hy + oy)
                     mask[yy][xx] = True
 
-        # 2) 局部支路：短路段，打破“棋盘式均匀”
-        branches = max(6, n // 3)
-        for _ in range(branches):
-            if rng.random() < 0.5 and verticals:
-                vx = rng.choice(verticals)
-                y0 = rng.randint(0, n - 1)
-                lo = max(2, spacing // 2)
-                hi = min(n - y0, spacing + 3)
-                if lo <= hi:
-                    seg_len = rng.randint(lo, hi)
-                    for yy in range(y0, min(n, y0 + seg_len)):
-                        mask[yy][vx] = True
-            elif horizontals:
-                hy = rng.choice(horizontals)
-                x0 = rng.randint(0, n - 1)
-                lo = max(2, spacing // 2)
-                hi = min(n - x0, spacing + 3)
-                if lo <= hi:
-                    seg_len = rng.randint(lo, hi)
-                    for xx in range(x0, min(n, x0 + seg_len)):
-                        mask[hy][xx] = True
+        # 主干已对 verticals 整列、horizontals 整行涂满；原先在此画的「支路」沿同列/同行只会重复写 True，已移除。
 
         if getattr(config, "ROAD_BORDER_RING", True):
             for i in range(n):

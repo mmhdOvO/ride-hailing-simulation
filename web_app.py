@@ -51,6 +51,10 @@ PLAY_CONTROL_CENTER_COLUMNS = [1, 1, 1]
 MAP_IMAGE_DISPLAY_WIDTH_PX: int | None = 1000
 AUTO_PLAY_DELAY_SEC = 0.12
 
+# 侧栏可调网格范围（与仿真可行性一致；修改此处即可统一最小/最大格数）
+GRID_WEB_MIN = 8
+GRID_WEB_MAX = 60
+
 # Streamlit 重跑时会把上一轮输出标成 stale 并降低透明度，看起来像整页变暗。
 # 下列样式尽量抵消该效果（升级 Streamlit 后若失效需按新版 DOM 微调）。
 _STREAMLIT_STALE_GREY_FIX_CSS = """
@@ -297,13 +301,15 @@ def _render_simulation_tabs_fragment() -> None:
         st.markdown(
             "在此模拟乘客发起订单（写入仿真订单池）。若开启「新订单强制等待一步」，下单当步不可被抢，下一步才可抢。"
         )
+        _mx = max(0, config.GRID_SIZE - 1)
+        _clamp_passenger_order_inputs(_mx)
         col_a, col_b = st.columns(2)
         with col_a:
-            sx = st.number_input("起点 X", 0, config.GRID_SIZE - 1, 5)
-            sy = st.number_input("起点 Y", 0, config.GRID_SIZE - 1, 5)
+            sx = st.number_input("起点 X", min_value=0, max_value=_mx, step=1, key="web_passenger_sx")
+            sy = st.number_input("起点 Y", min_value=0, max_value=_mx, step=1, key="web_passenger_sy")
         with col_b:
-            ex = st.number_input("终点 X", 0, config.GRID_SIZE - 1, 15)
-            ey = st.number_input("终点 Y", 0, config.GRID_SIZE - 1, 15)
+            ex = st.number_input("终点 X", min_value=0, max_value=_mx, step=1, key="web_passenger_ex")
+            ey = st.number_input("终点 Y", min_value=0, max_value=_mx, step=1, key="web_passenger_ey")
 
         if st.button("提交订单"):
             try:
@@ -484,6 +490,25 @@ def _render_simulation_tabs_fragment() -> None:
         _rerun_tabs_fragment_only()
 
 
+def _clamp_passenger_order_inputs(mx: int) -> None:
+    """乘客下单坐标限制在 [0, mx]。网格改小后 Session 中旧坐标会大于 max，先钳制避免 StreamlitValueAboveMaxError。"""
+    defaults = (
+        ("web_passenger_sx", min(5, mx)),
+        ("web_passenger_sy", min(5, mx)),
+        ("web_passenger_ex", min(15, mx)),
+        ("web_passenger_ey", min(15, mx)),
+    )
+    for key, default in defaults:
+        if key not in st.session_state:
+            st.session_state[key] = default
+            continue
+        try:
+            v = int(st.session_state[key])
+        except (TypeError, ValueError):
+            v = default
+        st.session_state[key] = max(0, min(mx, v))
+
+
 def _order_slider_sync_to_num() -> None:
     st.session_state["g_order_p_num"] = round(float(st.session_state["g_order_p_slider"]), 2)
 
@@ -509,7 +534,15 @@ def main():
 
     with st.sidebar:
         st.header("全局参数（重置后生效）")
-        g_grid = st.number_input("网格大小", min_value=8, max_value=60, value=config.GRID_SIZE, step=1)
+        _g0 = min(max(config.GRID_SIZE, GRID_WEB_MIN), GRID_WEB_MAX)
+        g_grid = st.number_input(
+            "网格大小",
+            min_value=GRID_WEB_MIN,
+            max_value=GRID_WEB_MAX,
+            value=_g0,
+            step=1,
+            help=f"可调范围 {GRID_WEB_MIN}～{GRID_WEB_MAX}；应用后与 config.GRID_SIZE 同步。",
+        )
         g_drivers = st.number_input("司机数量", min_value=2, max_value=50, value=config.NUM_DRIVERS, step=1)
         g_steps = st.number_input("最大仿真步数", min_value=20, max_value=2000, value=config.SIMULATION_STEPS, step=10)
         _op0 = float(getattr(config, "ORDER_PROBABILITY", 0.3))

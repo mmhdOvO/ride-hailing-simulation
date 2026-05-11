@@ -20,7 +20,7 @@ venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-启用 LLM 司机时，需在项目根目录创建 `.env`（可参考下方变量名）：
+启用 LLM 司机时，可在项目根目录复制 **`.env.example` 为 `.env`** 并填写密钥；或直接新建 `.env`，变量名如下：
 
 ```env
 DEEPSEEK_API_KEY=你的密钥

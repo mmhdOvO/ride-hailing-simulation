@@ -36,7 +36,7 @@ class DriverBrain:
         
         # 检查API密钥
         if not self.api_key:
-            raise ValueError("❌ 未找到DEEPSEEK_API_KEY，请在.env文件中设置")
+            raise ValueError("未找到 DEEPSEEK_API_KEY，请在项目根目录 .env 中配置")
         
         # 创建OpenAI客户端（DeepSeek兼容OpenAI SDK）
         self.client = OpenAI(
