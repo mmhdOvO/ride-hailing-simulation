@@ -289,6 +289,16 @@ class LLMDriver:
         followup_bonus = self._expected_followup_score(order, current_step)
         competition_penalty = self._competition_penalty(order, all_drivers)
 
+        mode = (getattr(config, "CH6_ABLATION_MODE", None) or "none").lower()
+        if mode == "no_competition":
+            competition_penalty = 0.0
+        if mode == "no_zone":
+            zone_bonus = 0.0
+            return immediate_eff * 0.75 + followup_bonus * 0.25 - competition_penalty
+        if mode == "no_followup":
+            followup_bonus = 0.0
+            return immediate_eff * 0.75 + zone_bonus * 0.25 - competition_penalty
+
         # 收益优先权重：即时收益主导 + 中期机会价值
         return (
             immediate_eff * 0.55
