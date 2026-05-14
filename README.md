@@ -83,7 +83,7 @@ README.md
 - `Simulation.collect_statistics()`：完成率、总流水、总里程、完成单平均/最大等待、收入 Gini 与变异系数等。
 - `Simulation.export_data(path)`：写入配置快照、统计数据与终态（司机/订单）。
 
-## 模型假设（写论文/验收时建议写明）
+## 模型假设（建模边界说明）
 
 - **抢单模式**：司机（或 LLM）在待接订单池上提交意向，平台侧以 `dispatch_with_conflict_resolution` + `resolve_conflicts` 消解冲突。
 - **传统调度**：在本项目中主要指**普通司机的选单启发式**（与 LLM 决策对比），统一在公平抢单框架下完成冲突消解。
@@ -91,4 +91,4 @@ README.md
 
 ## 许可证
 
-毕业设计/课程项目用途请遵循所在院系对代码与数据的要求；第三方 API 使用须遵守 DeepSeek 等服务条款。
+用于学习与研究时请遵守所在机构对代码与数据的使用要求；第三方 API 须遵守 DeepSeek 等服务条款。
