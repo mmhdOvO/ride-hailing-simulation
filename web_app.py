@@ -303,13 +303,24 @@ def _render_simulation_tabs_fragment() -> None:
         )
         _mx = max(0, config.GRID_SIZE - 1)
         _clamp_passenger_order_inputs(_mx)
-        col_a, col_b = st.columns(2)
-        with col_a:
-            sx = st.number_input("起点 X", min_value=0, max_value=_mx, step=1, key="web_passenger_sx")
-            sy = st.number_input("起点 Y", min_value=0, max_value=_mx, step=1, key="web_passenger_sy")
-        with col_b:
-            ex = st.number_input("终点 X", min_value=0, max_value=_mx, step=1, key="web_passenger_ex")
-            ey = st.number_input("终点 Y", min_value=0, max_value=_mx, step=1, key="web_passenger_ey")
+        # 起点 / 终点分组：中间留白列拉开距离；组内两列使 number_input 更窄
+        col_start_block, col_gap, col_end_block = st.columns([1.15, 0.45, 1.15], gap="large")
+        with col_start_block:
+            st.caption("起点")
+            c_sx, c_sy = st.columns(2, gap="small")
+            with c_sx:
+                sx = st.number_input("X", min_value=0, max_value=_mx, step=1, key="web_passenger_sx")
+            with c_sy:
+                sy = st.number_input("Y", min_value=0, max_value=_mx, step=1, key="web_passenger_sy")
+        with col_gap:
+            st.markdown("")
+        with col_end_block:
+            st.caption("终点")
+            c_ex, c_ey = st.columns(2, gap="small")
+            with c_ex:
+                ex = st.number_input("X", min_value=0, max_value=_mx, step=1, key="web_passenger_ex")
+            with c_ey:
+                ey = st.number_input("Y", min_value=0, max_value=_mx, step=1, key="web_passenger_ey")
 
         if st.button("提交订单"):
             try:
@@ -318,9 +329,9 @@ def _render_simulation_tabs_fragment() -> None:
             except ValueError as e:
                 st.error(str(e))
 
-        st.subheader("订单列表（节选）")
+        st.subheader("订单列表")
         rows = []
-        for o in sorted(sim.orders, key=lambda x: x["id"], reverse=True)[:30]:
+        for o in sorted(sim.orders, key=lambda x: x["id"], reverse=True):
             rows.append(
                 {
                     "订单ID": o["id"],
@@ -338,7 +349,9 @@ def _render_simulation_tabs_fragment() -> None:
             st.info("暂无订单。")
 
     with tab_driver:
-        st.markdown("司机视角：策略、收入、里程、位置与当前订单；可按收入排序，并对比大模型与规则组。")
+        st.markdown(
+            "司机视角：策略、收入、里程、位置与当前订单；表格列头可点击排序，并对比大模型与规则组。"
+        )
         llm_d = [d for d in sim.drivers if drv.is_llm(d)]
         rule_d = [d for d in sim.drivers if not drv.is_llm(d)]
         if llm_d and rule_d:
@@ -356,11 +369,6 @@ def _render_simulation_tabs_fragment() -> None:
                 f"规则 {len(rule_d)} 人 人均 {rule_rev / max(1, len(rule_d)):.1f} 元"
             )
 
-        sort_mode = st.selectbox(
-            "列表排序",
-            ("按司机ID", "按收入（高→低）", "按收入（低→高）"),
-            index=0,
-        )
         rows = []
         for d in sim.drivers:
             rows.append(
@@ -373,10 +381,6 @@ def _render_simulation_tabs_fragment() -> None:
                     "当前订单": drv.current_order(d),
                 }
             )
-        if sort_mode == "按收入（高→低）":
-            rows.sort(key=lambda r: r["收入"], reverse=True)
-        elif sort_mode == "按收入（低→高）":
-            rows.sort(key=lambda r: r["收入"])
         st.dataframe(rows, width="stretch", height=980)
 
     with tab_report:
@@ -396,7 +400,7 @@ def _render_simulation_tabs_fragment() -> None:
             _name_to_path = {p.name: p for p in run_files}
             _opts = [p.name for p in run_files]
             _chosen = st.multiselect(
-                "勾选要交给大模型分析的仿真记录（可多选，模型将结合项目说明与统计数据撰写报告）",
+                "勾选要交给大模型分析的仿真记录（下拉内逐项勾选，可多选；模型将结合项目说明与统计数据撰写报告）",
                 options=_opts,
                 default=[],
                 key="multiselect_saved_runs_for_ai",
@@ -431,11 +435,18 @@ def _render_simulation_tabs_fragment() -> None:
                         st.success("分析已写入 `saved_ai_analyses/`，下方可查看或删除。")
                         _rerun_tabs_fragment_only()
 
-            _del_opts = ["（不删除）"] + _opts
-            _del_pick = st.selectbox("删除某条仿真存档（仅从磁盘删除 JSON）", _del_opts, key="select_delete_run")
+            _del_pick = st.multiselect(
+                "勾选要从磁盘删除的仿真存档（可多选，仅从磁盘删除 JSON）",
+                options=_opts,
+                default=[],
+                key="multiselect_delete_saved_runs",
+            )
             if st.button("删除所选仿真存档", key="btn_delete_run_file"):
-                if _del_pick != "（不删除）":
-                    delete_saved_run(_name_to_path[_del_pick])
+                if not _del_pick:
+                    st.warning("请至少勾选一条要删除的存档。")
+                else:
+                    for _n in _del_pick:
+                        delete_saved_run(_name_to_path[_n])
                     _rerun_tabs_fragment_only()
         else:
             st.info("暂无存档。请将仿真跑满侧栏「最大仿真步数」，系统会自动保存 JSON。")
@@ -452,15 +463,20 @@ def _render_simulation_tabs_fragment() -> None:
                     if _meta:
                         st.json(_meta)
                     st.markdown(_ap.read_text(encoding="utf-8"))
-            _pick_del_ai = st.selectbox(
-                "删除已保存的大模型报告",
-                ["（不删除）"] + [_x.name for _x in ai_files],
-                key="select_delete_ai_report",
+            _ai_names = [_x.name for _x in ai_files]
+            _pick_del_ai = st.multiselect(
+                "勾选要删除的大模型报告（可多选）",
+                options=_ai_names,
+                default=[],
+                key="multiselect_delete_ai_reports",
             )
             if st.button("删除所选报告文件", key="btn_delete_ai_report"):
-                if _pick_del_ai != "（不删除）":
+                if not _pick_del_ai:
+                    st.warning("请至少勾选一条要删除的报告。")
+                else:
                     _map_ai = {p.name: p for p in ai_files}
-                    delete_ai_analysis(_map_ai[_pick_del_ai])
+                    for _n in _pick_del_ai:
+                        delete_ai_analysis(_map_ai[_n])
                     _rerun_tabs_fragment_only()
 
         st.divider()
