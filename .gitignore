@@ -20,13 +20,9 @@ tests/
 .claude/
 experiment_results/
 
-# 论文撰写、作图与第6章数据表（仅本地保留，不提交）
+# 论文撰写、作图与本地文档（仅本地保留，不提交）
 .cursor/
-docs/thesis_*.drawio
-docs/uml/
-docs/_ch6_*.txt
-docs/*正式稿*.md
-docs/thesis_ch6_data.md
+docs/
 experiments/
 extra_pairs.tsv
 remaining_paras.txt
